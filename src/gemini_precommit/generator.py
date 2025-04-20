@@ -7,6 +7,7 @@ and Gemini API responses.
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -14,6 +15,7 @@ import yaml
 
 from gemini_precommit.analyzer import analyze_codebase
 from gemini_precommit.gemini_client import generate_precommit_config
+from gemini_precommit.logging import get_logger
 
 
 class PrecommitGenerator:
@@ -30,10 +32,16 @@ class PrecommitGenerator:
                 environment variable GOOGLE_GEMINI_API_KEY.
             non_interactive: Whether to run in non-interactive mode. Defaults to False.
         """
+        self.logger = get_logger("generator")
+        self.logger.info(f"Initializing pre-commit generator for repository at {repo_path}")
+
         self.repo_path = Path(repo_path).resolve()
         self.api_key = api_key
         self.non_interactive = non_interactive
         self.config_path = self.repo_path / ".pre-commit-config.yaml"
+        self.logger.debug(f"Config path set to {self.config_path}")
+        self.logger.debug(f"Non-interactive mode: {self.non_interactive}")
+
         self.analysis_results: Dict[str, Any] = {}
         self.generated_config: Dict[str, Any] = {}
 
@@ -43,11 +51,20 @@ class PrecommitGenerator:
         Returns:
             A dictionary containing the generated pre-commit configuration.
         """
-        print("Analyzing codebase...")
-        self.analysis_results = analyze_codebase(str(self.repo_path))
+        self.logger.info("Starting pre-commit hook generation process")
 
-        print("Generating pre-commit configuration...")
+        self.logger.info("Analyzing codebase...")
+        start_time = time.time()
+        self.analysis_results = analyze_codebase(str(self.repo_path))
+        elapsed_time = time.time() - start_time
+        self.logger.debug(f"Codebase analysis completed in {elapsed_time:.2f} seconds")
+
+        self.logger.info("Generating pre-commit configuration...")
+        start_time = time.time()
         self.generated_config = generate_precommit_config(self.analysis_results, self.api_key)
+        elapsed_time = time.time() - start_time
+        self.logger.debug(f"Configuration generation completed in {elapsed_time:.2f} seconds")
+        self.logger.info("Pre-commit hook generation completed successfully")
 
         return self.generated_config
 
@@ -60,41 +77,58 @@ class PrecommitGenerator:
         Returns:
             True if the configuration was applied successfully, False otherwise.
         """
+        self.logger.info("Applying generated configuration to repository")
+
         if not self.generated_config:
+            self.logger.error("No configuration generated. Run generate() first.")
             print("No configuration generated. Run generate() first.")
             return False
 
         yaml_content = self.generated_config.get("yaml_content", "")
         if not yaml_content:
+            self.logger.error("Generated configuration is empty")
             print("Generated configuration is empty.")
             return False
 
         # If the file exists and we're in interactive mode, ask for confirmation
         if self.config_path.exists() and not self.non_interactive:
+            self.logger.info(f"Existing configuration found at {self.config_path}")
+            self.logger.debug(f"Generated configuration length: {len(yaml_content)} characters")
+
             print(f"\nExisting configuration found at {self.config_path}")
             print("\nGenerated configuration:")
             print("-" * 80)
             print(yaml_content)
             print("-" * 80)
-            
+
             response = input("\nDo you want to replace the existing configuration? (y/n): ")
             if response.lower() != "y":
+                self.logger.info("User chose not to apply the configuration")
                 print("Configuration not applied.")
                 return False
 
+            self.logger.info("User confirmed configuration replacement")
+
         # Write the configuration to the file
         try:
+            self.logger.info(f"Writing configuration to {self.config_path}")
             with open(self.config_path, "w", encoding="utf-8") as f:
                 f.write(yaml_content)
+            self.logger.info(f"Configuration successfully written to {self.config_path}")
             print(f"Configuration written to {self.config_path}")
         except Exception as e:
-            print(f"Failed to write configuration: {str(e)}")
+            error_msg = f"Failed to write configuration: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.debug(f"Full error details: {e}", exc_info=True)
+            print(error_msg)
             return False
 
         # Install the hooks if requested
         if install:
+            self.logger.info("Installing pre-commit hooks")
             return self._install_hooks()
 
+        self.logger.info("Configuration applied successfully")
         return True
 
     def _install_hooks(self) -> bool:
@@ -103,8 +137,11 @@ class PrecommitGenerator:
         Returns:
             True if the hooks were installed successfully, False otherwise.
         """
+        self.logger.info("Installing pre-commit hooks")
         try:
             print("Installing pre-commit hooks...")
+            self.logger.debug(f"Running 'pre-commit install' in {self.repo_path}")
+            start_time = time.time()
             result = subprocess.run(
                 ["pre-commit", "install"],
                 cwd=str(self.repo_path),
@@ -112,13 +149,23 @@ class PrecommitGenerator:
                 capture_output=True,
                 text=True,
             )
+            elapsed_time = time.time() - start_time
+            self.logger.debug(f"Hook installation completed in {elapsed_time:.2f} seconds")
+            self.logger.debug(f"Installation output: {result.stdout}")
             print(result.stdout)
+            self.logger.info("Pre-commit hooks installed successfully")
             return True
         except subprocess.CalledProcessError as e:
-            print(f"Failed to install hooks: {e.stderr}")
+            error_msg = f"Failed to install hooks: {e.stderr}"
+            self.logger.error(error_msg)
+            self.logger.debug(f"Command failed with return code {e.returncode}")
+            print(error_msg)
             return False
         except Exception as e:
-            print(f"Failed to install hooks: {str(e)}")
+            error_msg = f"Failed to install hooks: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.debug(f"Full error details: {e}", exc_info=True)
+            print(error_msg)
             return False
 
 
@@ -142,7 +189,7 @@ def generate_hooks(
     """
     generator = PrecommitGenerator(repo_path, api_key, non_interactive)
     config = generator.generate()
-    
+
     if generator.apply_config(install):
         return {
             "success": True,

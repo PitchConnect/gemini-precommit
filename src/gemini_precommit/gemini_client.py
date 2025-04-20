@@ -6,10 +6,13 @@ pre-commit hook configurations based on codebase analysis.
 
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 from dotenv import load_dotenv
+
+from gemini_precommit.logging import get_logger
 
 
 class GeminiClient:
@@ -22,20 +25,28 @@ class GeminiClient:
             api_key: Google Gemini API key. If not provided, will try to load from
                 environment variable GOOGLE_GEMINI_API_KEY.
         """
+        self.logger = get_logger("gemini_client")
+        self.logger.info("Initializing Gemini client")
+
         # Load environment variables from .env file
+        self.logger.debug("Loading environment variables from .env file")
         load_dotenv()
 
         # Use provided API key or get from environment
         self.api_key = api_key or os.getenv("GOOGLE_GEMINI_API_KEY")
         if not self.api_key:
+            self.logger.error("Gemini API key not provided")
             raise ValueError(
                 "Gemini API key not provided. Set GOOGLE_GEMINI_API_KEY environment variable "
                 "or pass api_key parameter."
             )
+        self.logger.debug("API key found")
 
         # Configure the Gemini API
+        self.logger.debug("Configuring Gemini API")
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel("gemini-pro")
+        self.logger.info("Gemini client initialized successfully")
 
     def generate_precommit_config(self, analysis_results: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a pre-commit configuration based on codebase analysis.
@@ -46,9 +57,22 @@ class GeminiClient:
         Returns:
             A dictionary containing the generated pre-commit configuration.
         """
+        self.logger.info("Generating pre-commit configuration based on analysis results")
+
+        self.logger.debug("Creating prompt for Gemini API")
         prompt = self._create_prompt(analysis_results)
+
+        self.logger.debug("Calling Gemini API")
+        start_time = time.time()
         response = self._call_gemini_api(prompt)
-        return self._parse_response(response)
+        elapsed_time = time.time() - start_time
+        self.logger.debug(f"Gemini API call completed in {elapsed_time:.2f} seconds")
+
+        self.logger.debug("Parsing API response")
+        result = self._parse_response(response)
+        self.logger.info("Pre-commit configuration generated successfully")
+
+        return result
 
     def _create_prompt(self, analysis_results: Dict[str, Any]) -> str:
         """Create a prompt for the Gemini API based on analysis results.
@@ -101,11 +125,19 @@ class GeminiClient:
         Raises:
             Exception: If the API call fails.
         """
+        self.logger.trace(f"Sending prompt to Gemini API: {prompt[:100]}...")
+
         try:
+            self.logger.debug("Making API request to Gemini")
             response = self.model.generate_content(prompt)
+            self.logger.debug("Received response from Gemini API")
+            self.logger.trace(f"Raw response: {response.text[:100]}...")
             return response.text
         except Exception as e:
-            raise Exception(f"Failed to call Gemini API: {str(e)}") from e
+            error_msg = f"Failed to call Gemini API: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.debug(f"Full error details: {e}", exc_info=True)
+            raise Exception(error_msg) from e
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         """Parse the response from the Gemini API.
@@ -119,26 +151,38 @@ class GeminiClient:
         Raises:
             ValueError: If the response cannot be parsed.
         """
+        self.logger.debug("Parsing Gemini API response")
         try:
             # Clean up the response to extract just the YAML content
             yaml_content = response.strip()
-            
+            self.logger.trace(f"Initial response length: {len(yaml_content)} characters")
+
             # If the response is wrapped in code blocks, extract just the content
             if yaml_content.startswith("```yaml"):
+                self.logger.debug("Detected ```yaml code block, extracting content")
                 yaml_content = yaml_content.split("```yaml", 1)[1]
             if yaml_content.startswith("```"):
+                self.logger.debug("Detected ``` code block, extracting content")
                 yaml_content = yaml_content.split("```", 1)[1]
             if yaml_content.endswith("```"):
+                self.logger.debug("Detected trailing ``` code block, removing it")
                 yaml_content = yaml_content.rsplit("```", 1)[0]
-                
+
             yaml_content = yaml_content.strip()
-            
-            return {
+            self.logger.debug(f"Extracted YAML content length: {len(yaml_content)} characters")
+            self.logger.trace(f"YAML content starts with: {yaml_content[:50]}...")
+
+            result = {
                 "yaml_content": yaml_content,
                 "raw_response": response
             }
+            self.logger.debug("Successfully parsed Gemini API response")
+            return result
         except Exception as e:
-            raise ValueError(f"Failed to parse Gemini API response: {str(e)}") from e
+            error_msg = f"Failed to parse Gemini API response: {str(e)}"
+            self.logger.error(error_msg)
+            self.logger.debug(f"Full error details: {e}", exc_info=True)
+            raise ValueError(error_msg) from e
 
 
 def generate_precommit_config(analysis_results: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:

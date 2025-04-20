@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from gemini_precommit.logging import get_logger
+
 
 class CodebaseAnalyzer:
     """Analyzes a codebase to inform pre-commit hook generation."""
@@ -19,7 +21,9 @@ class CodebaseAnalyzer:
         Args:
             repo_path: Path to the repository root. Defaults to current directory.
         """
+        self.logger = get_logger("analyzer")
         self.repo_path = Path(repo_path).resolve()
+        self.logger.info(f"Initializing analyzer for repository at {self.repo_path}")
         self.file_extensions: Set[str] = set()
         self.languages: Set[str] = set()
         self.python_dependencies: Set[str] = set()
@@ -32,13 +36,24 @@ class CodebaseAnalyzer:
         Returns:
             A dictionary containing analysis results.
         """
+        self.logger.info("Starting codebase analysis")
+
+        self.logger.debug("Finding file extensions")
         self._find_file_extensions()
+
+        self.logger.debug("Detecting languages")
         self._detect_languages()
+
+        self.logger.debug("Finding Python dependencies")
         self._find_python_dependencies()
+
+        self.logger.debug("Finding existing configurations")
         self._find_existing_configs()
+
+        self.logger.debug("Finding CI/CD workflows")
         self._find_ci_workflows()
 
-        return {
+        results = {
             "file_extensions": sorted(list(self.file_extensions)),
             "languages": sorted(list(self.languages)),
             "python_dependencies": sorted(list(self.python_dependencies)),
@@ -46,8 +61,16 @@ class CodebaseAnalyzer:
             "ci_workflows": [str(p) for p in self.ci_workflows],
         }
 
+        self.logger.info(f"Analysis complete. Found {len(self.file_extensions)} file extensions, "
+                      f"{len(self.languages)} languages, {len(self.python_dependencies)} Python dependencies, "
+                      f"{len(self.existing_configs)} existing configs, and {len(self.ci_workflows)} CI workflows")
+        self.logger.debug(f"Analysis results: {results}")
+
+        return results
+
     def _find_file_extensions(self) -> None:
         """Find all file extensions in the repository."""
+        self.logger.trace(f"Walking directory tree starting at {self.repo_path}")
         for root, _, files in os.walk(self.repo_path):
             # Skip hidden directories and virtual environments
             if any(
@@ -55,15 +78,19 @@ class CodebaseAnalyzer:
                 or part in ("venv", ".venv", "env", "node_modules", "__pycache__")
                 for part in Path(root).parts
             ):
+                self.logger.trace(f"Skipping directory {root}")
                 continue
 
+            self.logger.trace(f"Processing {len(files)} files in {root}")
             for file in files:
                 # Skip hidden files
                 if file.startswith("."):
+                    self.logger.trace(f"Skipping hidden file {file}")
                     continue
 
                 ext = os.path.splitext(file)[1].lower()
                 if ext:
+                    self.logger.trace(f"Found file extension: {ext[1:]} in file {file}")
                     self.file_extensions.add(ext[1:])  # Remove the leading dot
 
     def _detect_languages(self) -> None:
